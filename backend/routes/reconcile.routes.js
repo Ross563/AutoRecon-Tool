@@ -1,6 +1,9 @@
 import express from "express";
 import multer from "multer";
-import { uploadAndReconcile } from "../controllers/reconcile.controllers.js";
+import {
+  uploadAndReconcile,
+  getReconciliations,
+} from "../controllers/reconcile.controllers.js";
 import protectRoute from "../middlewares/protectRoute.js";
 
 const router = express.Router();
@@ -12,5 +15,6 @@ router.post(
   upload.fields([{ name: "fileA" }, { name: "fileB" }]),
   uploadAndReconcile
 );
+router.get("/", protectRoute, getReconciliations);
 
 export default router;
