@@ -53,8 +53,11 @@ export default function Home() {
           )}
         </button>
         {loading && (
-          <div className="flex justify-center items-center mt-6">
+          <div className="flex flex-col justify-center items-center mt-6">
             <span className="loading loading-spinner loading-lg"></span>
+            <span className="mt-4 text-gray-600 text-center">
+              Please wait, AI may take 30 ~ 60 seconds to show results.
+            </span>
           </div>
         )}
         {result && !loading && (
