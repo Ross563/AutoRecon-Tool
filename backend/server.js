@@ -13,7 +13,8 @@ const app = express();
 app.use(
   cors({
     credentials: true,
-    origin: process.env.frontend_base_url,
+    origin:
+      process.env.frontend_base_url || "https://auto-recon-tool.vercel.app",
   })
 );
 app.use(express.urlencoded({ extended: true }));
