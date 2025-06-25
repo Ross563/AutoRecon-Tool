@@ -15,12 +15,44 @@ function parseFile(buffer, fileName) {
   return xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
 }
 
+function convertExcelDateToIndianFormat(serial) {
+  if (typeof serial !== "number") return serial;
+  const utc_days = Math.floor(serial - 25569);
+  const date = new Date(utc_days * 86400 * 1000);
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+  return `${day}/${month}/${year}`;
+}
+
+function normalizeDatesInObject(obj) {
+  if (Array.isArray(obj)) {
+    return obj.map(normalizeDatesInObject);
+  }
+  if (typeof obj === "object" && obj !== null) {
+    const newObj = {};
+    for (const key in obj) {
+      if (key.toLowerCase().includes("date")) {
+        newObj[key] = convertExcelDateToIndianFormat(obj[key]);
+      } else {
+        newObj[key] = normalizeDatesInObject(obj[key]);
+      }
+    }
+    return newObj;
+  }
+  return obj;
+}
+
 function chunkArray(arr, chunkSize) {
   const result = [];
   for (let i = 0; i < arr.length; i += chunkSize) {
     result.push(arr.slice(i, i + chunkSize));
   }
   return result;
+}
+
+function sortByDate(data) {
+  return data.sort((a, b) => new Date(a.Date) - new Date(b.Date));
 }
 
 function extractValidJson(text) {
@@ -81,8 +113,11 @@ export const uploadAndReconcile = async (req, res) => {
     const fileA = req.files.fileA[0];
     const fileB = req.files.fileB[0];
 
-    const sheetA = parseFile(fileA.buffer, fileA.originalname);
-    const sheetB = parseFile(fileB.buffer, fileB.originalname);
+    let sheetA = parseFile(fileA.buffer, fileA.originalname);
+    let sheetB = parseFile(fileB.buffer, fileB.originalname);
+
+    sheetA = sortByDate(sheetA);
+    sheetB = sortByDate(sheetB);
 
     const bigger = sheetA.length >= sheetB.length ? sheetA : sheetB;
     const smaller = sheetA.length < sheetB.length ? sheetA : sheetB;
@@ -117,18 +152,20 @@ export const uploadAndReconcile = async (req, res) => {
 
     for (const result of batchResults) {
       for (const match of result.matches || []) {
-        finalMatches.push(match);
-        allMatchedA.add(JSON.stringify(match.file_a_entry));
-        allMatchedB.add(JSON.stringify(match.file_b_entry));
+        const normalizedMatch = normalizeDatesInObject(match);
+        finalMatches.push(normalizedMatch);
+        allMatchedA.add(JSON.stringify(normalizedMatch.file_a_entry));
+        allMatchedB.add(JSON.stringify(normalizedMatch.file_b_entry));
       }
     }
 
-    const unmatchedA = sheetA.filter(
-      (a) => !allMatchedA.has(JSON.stringify(a))
-    );
-    const unmatchedB = sheetB.filter(
-      (b) => !allMatchedB.has(JSON.stringify(b))
-    );
+    const unmatchedA = sheetA
+      .filter((a) => !allMatchedA.has(JSON.stringify(a)))
+      .map(normalizeDatesInObject);
+
+    const unmatchedB = sheetB
+      .filter((b) => !allMatchedB.has(JSON.stringify(b)))
+      .map(normalizeDatesInObject);
 
     const finalResult = {
       matches: finalMatches,
