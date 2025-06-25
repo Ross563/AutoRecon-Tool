@@ -6,6 +6,17 @@ import Reconciliation from "../models/reconciliation.model.js";
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_KEY);
 
+const systemInstruction = `You are an expert reconciliation assistant.
+Match transactions from File A and File B based on these rules:
+1. Match based on customer names, invoice/transaction numbers, amounts, and descriptions.
+2. Allow date mismatches up to ±3 days. DO NOT match entries if the date difference is more than 3 days.
+3. Handle fuzzy matches in text fields (e.g., Invoice vs INV vs /INV/).
+4. Consider currency formatting differences but ensure amounts match logically.
+5. Avoid duplicate matches.
+6. Return only one list per entry: matched or unmatched.
+7. Dates must be returned in human-readable format (DD/MM/YYYY).
+8. Keep JSON clean and parsable. Do not include markdown or explanations.`;
+
 function parseFile(buffer, fileName) {
   const isCSV = fileName.endsWith(".csv");
   const workbook = xlsx.read(buffer, {
@@ -75,29 +86,32 @@ function extractValidJson(text) {
 }
 
 async function reconcileBatch(batchA, batchB) {
-  const prompt = `You are a reconciliation assistant. Match transactions between two datasets.
-Consider fuzzy description matching, currency/format variations, date shifts (±3 days), and partial/duplicate payments.
-Return ONLY a JSON object without any markdown or formatting characters like \`\`\`.
-Format:
+  const prompt = `File A: ${JSON.stringify(batchA, null, 2)}
+
+File B: ${JSON.stringify(batchB, null, 2)}
+
+Return ONLY a JSON object without markdown, like:
 {
   "matches": [
     {
       "file_a_entry": { ... },
       "file_b_entry": { ... },
       "confidence_score": 0.87,
-      "match_reason": "Description and amount match, dates within range"
+      "match_reason": "Amount and description match, dates within 3 days"
     }
   ],
-  "unmatched_file_a_entries": [Entries from File A that were NOT part of any match],
-  "unmatched_file_b_entries": [Entries from File B that were NOT part of any match]
+  "unmatched_file_a_entries": [ ... ],
+  "unmatched_file_b_entries": [ ... ]
 }
-Ensure that each entry appears in only one list — either in matches or in unmatched entries. Do NOT duplicate records across lists.
 
-File A: ${JSON.stringify(batchA, null, 2)}
+Rules:
+- Do not match entries with date differences over 3 days.
+- Return dates in Indian format: DD/MM/YYYY.`;
 
-File B: ${JSON.stringify(batchB, null, 2)}`;
-
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+  const model = genAI.getGenerativeModel({
+    model: "gemini-1.5-flash",
+    systemInstruction,
+  });
   const result = await model.generateContent(prompt);
   const response = await result.response;
   const text = await response.text();
@@ -126,6 +140,8 @@ export const uploadAndReconcile = async (req, res) => {
     const finalMatches = [];
     const allMatchedA = new Set();
     const allMatchedB = new Set();
+    const unmatchedASet = new Set();
+    const unmatchedBSet = new Set();
 
     const MAX_CONCURRENT = 3;
 
@@ -157,15 +173,22 @@ export const uploadAndReconcile = async (req, res) => {
         allMatchedA.add(JSON.stringify(normalizedMatch.file_a_entry));
         allMatchedB.add(JSON.stringify(normalizedMatch.file_b_entry));
       }
+
+      for (const unmatchedAEntry of result.unmatched_file_a_entries || []) {
+        const entry = normalizeDatesInObject(unmatchedAEntry);
+        const str = JSON.stringify(entry);
+        if (!allMatchedA.has(str)) unmatchedASet.add(str);
+      }
+
+      for (const unmatchedBEntry of result.unmatched_file_b_entries || []) {
+        const entry = normalizeDatesInObject(unmatchedBEntry);
+        const str = JSON.stringify(entry);
+        if (!allMatchedB.has(str)) unmatchedBSet.add(str);
+      }
     }
 
-    const unmatchedA = sheetA
-      .filter((a) => !allMatchedA.has(JSON.stringify(a)))
-      .map(normalizeDatesInObject);
-
-    const unmatchedB = sheetB
-      .filter((b) => !allMatchedB.has(JSON.stringify(b)))
-      .map(normalizeDatesInObject);
+    const unmatchedA = Array.from(unmatchedASet).map((str) => JSON.parse(str));
+    const unmatchedB = Array.from(unmatchedBSet).map((str) => JSON.parse(str));
 
     const finalResult = {
       matches: finalMatches,
